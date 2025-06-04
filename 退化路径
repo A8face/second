@@ -1,0 +1,585 @@
+版本1
+  import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+from scipy.interpolate import make_interp_spline
+from matplotlib.gridspec import GridSpec
+
+# Set random seed for reproducibility
+np.random.seed(42)
+
+# ======================
+# 1. Advanced Degradation Model Configuration
+# ======================
+class DegradationModelConfig:
+    def __init__(self):
+        # Time parameters
+        self.start_date = datetime(2023, 1, 1)
+        self.years = 4
+        self.days = self.years * 365
+        self.hours_per_day = 24
+        self.total_hours = self.days * self.hours_per_day
+        
+        # Operating conditions
+        self.condition_types = ['Normal', 'High Load', 'High Temp', 'Rough Sea']
+        self.condition_probs = [0.65, 0.20, 0.10, 0.05]
+        
+        # Degradation impact factors
+        self.condition_impact = {
+            'Normal': 1.0,
+            'High Load': 1.8,
+            'High Temp': 2.4,
+            'Rough Sea': 3.2
+        }
+        
+        # Cleaning parameters
+        self.cleaning_interval = 3
+        self.cleaning_effectiveness = {
+            'recoverable': 0.95,
+            'semi_permanent': 0.60,
+            'permanent': 0.05
+        }
+        self.cleaning_decay = 0.0008
+        
+        # Degradation model parameters
+        # Recoverable degradation
+        self.recoverable_rate = {
+            'base': 0.00025,
+            'noise': 0.00003,
+            'shock_prob': 0.00035,
+            'shock_severity': [0.008, 0.025],
+            'recovery_speed': 0.85
+        }
+        
+        # Semi-permanent degradation
+        self.semi_permanent_rate = {
+            'base': 0.00008,
+            'noise': 0.000012,
+            'shock_prob': 0.00025,
+            'shock_severity': [0.004, 0.015],
+            'recovery_speed': 0.55
+        }
+        
+        # Permanent degradation
+        self.permanent_rate = {
+            'base': 0.000045,
+            'noise': 0.000007,
+            'shock_prob': 0.00018,
+            'shock_severity': [0.002, 0.008],
+            'recovery_speed': 0.15
+        }
+        
+        # Initial health state
+        self.initial_health = 1.00
+        
+        # Performance recovery parameters
+        self.recovery_duration = 24
+        self.recovery_factor = 1.8
+
+# ======================
+# 2. Operating Condition Simulator
+# ======================
+class ConditionSimulator:
+    def __init__(self, config):
+        self.config = config
+        
+    def generate_conditions(self):
+        """Generate time-varying operating conditions"""
+        condition_sequence = np.random.choice(
+            self.config.condition_types,
+            size=self.config.total_hours,
+            p=self.config.condition_probs
+        )
+        
+        # Ensure operating condition continuity
+        current_condition = condition_sequence[0]
+        condition_duration = 0
+        min_duration = 24
+        
+        for i in range(1, self.config.total_hours):
+            condition_duration += 1
+            
+            if condition_duration >= min_duration:
+                if current_condition == 'Rough Sea' and np.random.rand() < 0.3:
+                    new_condition = np.random.choice(['Normal', 'High Load'], p=[0.7, 0.3])
+                    condition_sequence[i] = new_condition
+                    current_condition = new_condition
+                    condition_duration = 0
+                elif np.random.rand() < 0.08:
+                    new_condition = np.random.choice(
+                        self.config.condition_types,
+                        p=self.config.condition_probs
+                    )
+                    condition_sequence[i] = new_condition
+                    current_condition = new_condition
+                    condition_duration = 0
+                else:
+                    condition_sequence[i] = current_condition
+            else:
+                condition_sequence[i] = current_condition
+        
+        return condition_sequence
+    
+    def get_impact_factor(self, condition):
+        """Get degradation impact factor for condition"""
+        return self.config.condition_impact[condition]
+
+# ======================
+# 3. Cleaning Event Simulator
+# ======================
+class CleaningSimulator:
+    def __init__(self, config):
+        self.config = config
+        self.total_days = config.days
+        
+    def generate_cleaning_schedule(self):
+        """Generate cleaning schedule"""
+        cleaning_days = []
+        current_day = self.config.cleaning_interval
+        
+        while current_day <= self.total_days:
+            offset = np.random.uniform(-0.5, 0.5)
+            cleaning_days.append(current_day + offset)
+            current_day += self.config.cleaning_interval
+        
+        return cleaning_days
+    
+    def get_cleaning_effectiveness(self, cleaning_count, deg_type):
+        """Calculate cleaning effectiveness"""
+        base_effectiveness = self.config.cleaning_effectiveness[deg_type]
+        effectiveness = base_effectiveness * (1 - self.config.cleaning_decay * cleaning_count)
+        
+        min_effect = {
+            'recoverable': 0.85,
+            'semi_permanent': 0.45,
+            'permanent': 0.02
+        }
+        return max(effectiveness, min_effect[deg_type])
+
+# ======================
+# 4. Degradation Path Simulator with Performance Recovery
+# ======================
+class AdvancedDegradationSimulator:
+    def __init__(self, config):
+        self.config = config
+        self.condition_simulator = ConditionSimulator(config)
+        self.cleaning_simulator = CleaningSimulator(config)
+        
+    def simulate(self):
+        """Simulate degradation path with performance recovery"""
+        # Generate timestamps
+        timestamps = [self.config.start_date + timedelta(hours=i) 
+                      for i in range(self.config.total_hours)]
+        
+        # Generate operating conditions
+        conditions = self.condition_simulator.generate_conditions()
+        
+        # Generate cleaning schedule
+        cleaning_days = self.cleaning_simulator.generate_cleaning_schedule()
+        cleaning_hours = [int(day * self.config.hours_per_day) for day in cleaning_days]
+        cleaning_count = 0
+        
+        # Initialize degradation paths
+        health = np.full(self.config.total_hours, self.config.initial_health)
+        recoverable = np.zeros(self.config.total_hours)
+        semi_permanent = np.zeros(self.config.total_hours)
+        permanent = np.zeros(self.config.total_hours)
+        
+        # Performance recovery state
+        recovery_state = np.zeros(self.config.total_hours)
+        
+        # Cleaning effects record
+        cleaning_effects = np.zeros((self.config.total_hours, 3))
+        
+        # Main simulation loop
+        for t in range(1, self.config.total_hours):
+            # Update recovery state
+            if recovery_state[t-1] > 0:
+                recovery_state[t] = max(recovery_state[t-1] - 1/self.config.recovery_duration, 0)
+            
+            # Get condition impact
+            condition = conditions[t]
+            impact_factor = self.condition_simulator.get_impact_factor(condition)
+            
+            # Calculate degradation increments
+            # 1. Recoverable degradation
+            base_rate = self.config.recoverable_rate['base'] * impact_factor
+            noise = np.random.normal(0, self.config.recoverable_rate['noise'])
+            shock = np.random.uniform(*self.config.recoverable_rate['shock_severity']) \
+                if np.random.rand() < self.config.recoverable_rate['shock_prob'] else 0
+            recoverable[t] = recoverable[t-1] + max(base_rate + noise + shock, 0)
+            
+            # 2. Semi-permanent degradation
+            base_rate = self.config.semi_permanent_rate['base'] * impact_factor
+            noise = np.random.normal(0, self.config.semi_permanent_rate['noise'])
+            shock = np.random.uniform(*self.config.semi_permanent_rate['shock_severity']) \
+                if np.random.rand() < self.config.semi_permanent_rate['shock_prob'] else 0
+            semi_permanent[t] = semi_permanent[t-1] + max(base_rate + noise + shock, 0)
+            
+            # 3. Permanent degradation
+            base_rate = self.config.permanent_rate['base'] * impact_factor
+            noise = np.random.normal(0, self.config.permanent_rate['noise'])
+            shock = np.random.uniform(*self.config.permanent_rate['shock_severity']) \
+                if np.random.rand() < self.config.permanent_rate['shock_prob'] else 0
+            permanent[t] = permanent[t-1] + max(base_rate + noise + shock, 0)
+            
+            # Calculate total health
+            total_degradation = recoverable[t] + semi_permanent[t] + permanent[t]
+            health[t] = max(self.config.initial_health - total_degradation, 0.01)
+            
+            # Apply performance recovery
+            if recovery_state[t] > 0:
+                recovery_factor = 1 + (self.config.recovery_factor - 1) * recovery_state[t]
+                health[t] = min(health[t] * recovery_factor, self.config.initial_health)
+            
+            # Apply cleaning effects
+            if t in cleaning_hours:
+                cleaning_count += 1
+                recovery_state[t] = 1.0
+                
+                # Calculate degradation removal
+                recov_effect = self.cleaning_simulator.get_cleaning_effectiveness(
+                    cleaning_count, 'recoverable')
+                semi_effect = self.cleaning_simulator.get_cleaning_effectiveness(
+                    cleaning_count, 'semi_permanent')
+                perm_effect = self.cleaning_simulator.get_cleaning_effectiveness(
+                    cleaning_count, 'permanent')
+                
+                # Apply cleaning
+                recoverable_reduction = recoverable[t] * recov_effect
+                semi_reduction = semi_permanent[t] * semi_effect
+                permanent_reduction = permanent[t] * perm_effect
+                
+                recoverable[t] = max(recoverable[t] - recoverable_reduction, 0)
+                semi_permanent[t] = max(semi_permanent[t] - semi_reduction, 0)
+                permanent[t] = max(permanent[t] - permanent_reduction, 0)
+                
+                # Record cleaning effects
+                cleaning_effects[t] = [recoverable_reduction, semi_reduction, permanent_reduction]
+                
+                # Recalculate health
+                total_degradation = recoverable[t] + semi_permanent[t] + permanent[t]
+                health[t] = max(self.config.initial_health - total_degradation, 0.01)
+                
+                # Apply immediate performance boost
+                health[t] = min(health[t] * self.config.recovery_factor, self.config.initial_health)
+        
+        # Create results DataFrame
+        results = pd.DataFrame({
+            'timestamp': timestamps,
+            'health': health,
+            'recoverable': recoverable,
+            'semi_permanent': semi_permanent,
+            'permanent': permanent,
+            'condition': conditions,
+            'recovery_state': recovery_state,
+            'cleaning_effect_recov': cleaning_effects[:, 0],
+            'cleaning_effect_semi': cleaning_effects[:, 1],
+            'cleaning_effect_perm': cleaning_effects[:, 2],
+        })
+        
+        # Add date information
+        results['date'] = results['timestamp'].dt.date
+        results['day'] = (results['timestamp'] - results['timestamp'].iloc[0]).dt.days
+        
+        return results, cleaning_hours
+
+# ======================
+# 5. Complete Four-Plot Visualization
+# ======================
+class CompleteVisualization:
+    def __init__(self, degradation_data, cleaning_hours, config):
+        self.data = degradation_data
+        self.cleaning_hours = cleaning_hours
+        self.config = config
+        
+        # Create daily data
+        self.daily_data = self.data.groupby('date').last().reset_index()
+        
+        # Mark cleaning dates
+        cleaning_dates = self.data.loc[self.data.index.isin(cleaning_hours), 'date'].unique()
+        self.daily_data['cleaning_event'] = self.daily_data['date'].isin(cleaning_dates)
+        
+        # Add year information
+        self.daily_data['year'] = (self.daily_data['day'] // 365) + 1
+    
+    def plot_complete_analysis(self):
+        """Create comprehensive four-plot analysis"""
+        plt.figure(figsize=(18, 16))
+        
+        # Create grid layout
+        gs = GridSpec(3, 2, height_ratios=[1.5, 1, 1])
+        
+        # Plot 1: Main Health Trend (top, full width)
+        ax1 = plt.subplot(gs[0, :])
+        self._plot_main_health_trend(ax1)
+        
+        # Plot 2: Degradation Components (middle left)
+        ax2 = plt.subplot(gs[1, 0])
+        self._plot_degradation_components(ax2)
+        
+        # Plot 3: Performance Recovery Detail (middle right)
+        ax3 = plt.subplot(gs[1, 1])
+        self._plot_recovery_detail(ax3)
+        
+        # Plot 4: Annual Health Comparison (bottom, full width)
+        ax4 = plt.subplot(gs[2, :])
+        self._plot_annual_comparison(ax4)
+        
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.95, hspace=0.3)
+        plt.suptitle('Comprehensive Turbocharger Degradation and Recovery Analysis', 
+                     fontsize=22, fontweight='bold')
+        plt.savefig('complete_turbine_analysis.png', dpi=300, bbox_inches='tight')
+        plt.show()
+    
+    def _plot_main_health_trend(self, ax):
+        """Plot main health trend with performance recovery markers"""
+        # Apply smoothing for cleaner visualization
+        self.daily_data['health_smooth'] = self.daily_data['health'].rolling(window=7, min_periods=1).mean()
+        
+        # Plot smoothed health trend
+        ax.plot(self.daily_data['day'], self.daily_data['health_smooth'], 
+                color='#1f77b4', linewidth=2.5, label='Health Status')
+        
+        # Highlight cleaning events and performance peaks
+        cleaning_data = self.data.loc[self.data.index.isin(self.cleaning_hours)]
+        peak_values = []
+        
+        for _, row in cleaning_data.iterrows():
+            # Mark cleaning event with vertical line
+            ax.axvline(x=row['day'], color='#ff7f0e', alpha=0.3, linestyle='-', zorder=1)
+            
+            # Find and mark performance peak
+            post_clean = self.data[
+                (self.data['timestamp'] >= row['timestamp']) & 
+                (self.data['timestamp'] <= row['timestamp'] + timedelta(hours=24))
+            ]
+            if not post_clean.empty:
+                peak_idx = post_clean['health'].idxmax()
+                peak_row = self.data.loc[peak_idx]
+                peak_values.append(peak_row['health'])
+                ax.plot(peak_row['day'], peak_row['health'], 
+                       'D', markersize=6, color='#d62728', alpha=0.8,
+                       markeredgecolor='black', zorder=3, label='Performance Peak')
+        
+        # Add thresholds
+        ax.axhline(y=0.85, color='#ff7f0e', linestyle='--', alpha=0.8, zorder=2)
+        ax.text(50, 0.852, 'Maintenance Threshold', fontsize=12, color='#ff7f0e')
+        
+        ax.axhline(y=0.75, color='#d62728', linestyle='--', alpha=0.8, zorder=2)
+        ax.text(50, 0.752, 'Failure Threshold', fontsize=12, color='#d62728')
+        
+        # Add year markers
+        for year in range(1, 5):
+            day = year * 365
+            ax.axvline(x=day, color='#2ca02c', linestyle='--', alpha=0.5, zorder=1)
+            ax.text(day + 10, 0.72, f'Year {year}', fontsize=11, color='#2ca02c')
+        
+        # Set properties
+        ax.set_title('Health Status Trend with Performance Recovery Peaks', fontsize=16)
+        ax.set_xlabel('Operating Days', fontsize=12)
+        ax.set_ylabel('Health Status', fontsize=12)
+        ax.set_ylim(0.70, 1.02)
+        ax.set_xlim(0, self.daily_data['day'].max())
+        ax.grid(alpha=0.1)
+        
+        # Add performance recovery statistics
+        if peak_values:
+            avg_recovery = np.mean([pv - cd for pv, cd in zip(peak_values, cleaning_data['health'])])
+            max_recovery = max(peak_values) - min(cleaning_data['health'])
+            
+            stats_text = f'Average Recovery: {avg_recovery:.3f}\nMax Recovery: {max_recovery:.3f}'
+            ax.text(0.98, 0.05, stats_text,
+                   transform=ax.transAxes, ha='right', fontsize=11,
+                   bbox=dict(facecolor='white', alpha=0.8, edgecolor='grey'))
+        
+        # Create custom legend
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color='#1f77b4', lw=2, label='Health Status'),
+            Line2D([0], [0], marker='D', color='w', markerfacecolor='#d62728', 
+                  markersize=8, markeredgecolor='black', label='Performance Peak'),
+            Line2D([0], [0], color='#ff7f0e', linestyle='-', alpha=0.3, label='Cleaning Event'),
+        ]
+        ax.legend(handles=legend_elements, loc='lower left', fontsize=10)
+    
+    def _plot_degradation_components(self, ax):
+        """Plot degradation components with clear color scheme"""
+        # Plot stacked area
+        ax.stackplot(
+            self.daily_data['day'], 
+            self.daily_data['recoverable'], 
+            self.daily_data['semi_permanent'], 
+            self.daily_data['permanent'],
+            labels=['Recoverable', 'Semi-Permanent', 'Permanent'],
+            colors=['#a6d96a', '#fdae61', '#d7191c'],
+            alpha=0.85
+        )
+        
+        # Set properties
+        ax.set_title('Degradation Components Over Time', fontsize=14)
+        ax.set_xlabel('Operating Days', fontsize=11)
+        ax.set_ylabel('Cumulative Degradation', fontsize=11)
+        ax.set_ylim(0, 0.35)
+        ax.set_xlim(0, self.daily_data['day'].max())
+        ax.grid(alpha=0.1)
+        ax.legend(loc='upper left', fontsize=9)
+        
+        # Add degradation composition info
+        total_deg = self.daily_data.iloc[-1][['recoverable', 'semi_permanent', 'permanent']].sum()
+        if total_deg > 0:
+            recov_pct = self.daily_data.iloc[-1]['recoverable'] / total_deg * 100
+            semi_pct = self.daily_data.iloc[-1]['semi_permanent'] / total_deg * 100
+            perm_pct = self.daily_data.iloc[-1]['permanent'] / total_deg * 100
+            
+            comp_text = (f'Final Composition:\n'
+                         f'Recoverable: {recov_pct:.1f}%\n'
+                         f'Semi-Permanent: {semi_pct:.1f}%\n'
+                         f'Permanent: {perm_pct:.1f}%')
+            
+            ax.text(0.95, 0.95, comp_text,
+                   transform=ax.transAxes, ha='right', va='top', fontsize=10,
+                   bbox=dict(facecolor='white', alpha=0.8, edgecolor='grey'))
+    
+    def _plot_recovery_detail(self, ax):
+        """Plot detailed performance recovery after a cleaning event"""
+        if not self.cleaning_hours:
+            ax.text(0.5, 0.5, 'No Cleaning Events', ha='center', va='center', fontsize=14)
+            return
+        
+        # Select a mid-life cleaning event
+        mid_point = self.config.total_hours // 2
+        cleaning_idx = min(self.cleaning_hours, key=lambda x: abs(x - mid_point))
+        
+        # Get 72-hour window around cleaning event
+        start_hour = max(0, cleaning_idx - 24)
+        end_hour = min(self.config.total_hours, cleaning_idx + 48)
+        recovery_data = self.data.iloc[start_hour:end_hour].copy()
+        recovery_data['hours_from_clean'] = np.arange(-24, 48) if len(recovery_data) == 72 else np.arange(-24, len(recovery_data)-24)
+        
+        # Plot health change
+        ax.plot(recovery_data['hours_from_clean'], recovery_data['health'], 
+                color='#1f77b4', linewidth=2, label='Health Status')
+        
+        # Mark cleaning time
+        ax.axvline(x=0, color='#ff7f0e', linestyle='-', alpha=0.8, label='Cleaning Event')
+        
+        # Highlight performance peak
+        post_clean = recovery_data[recovery_data['hours_from_clean'] >= 0]
+        if not post_clean.empty:
+            peak_idx = post_clean['health'].idxmax()
+            peak_row = recovery_data.loc[peak_idx]
+            ax.plot(peak_row['hours_from_clean'], peak_row['health'], 
+                   'D', markersize=8, color='#d62728', alpha=0.8,
+                   markeredgecolor='black', label='Performance Peak')
+            
+            # Add recovery magnitude
+            recovery_mag = peak_row['health'] - recovery_data.loc[cleaning_idx]['health']
+            ax.annotate(f'+{recovery_mag:.3f}', 
+                       xy=(peak_row['hours_from_clean'], peak_row['health']),
+                       xytext=(peak_row['hours_from_clean'], peak_row['health'] + 0.02),
+                       ha='center', fontsize=10,
+                       arrowprops=dict(arrowstyle='->', color='black'))
+        
+        # Set properties
+        ax.set_title('Performance Recovery After Cleaning (72 Hours)', fontsize=14)
+        ax.set_xlabel('Hours from Cleaning Event', fontsize=11)
+        ax.set_ylabel('Health Status', fontsize=11)
+        ax.set_ylim(recovery_data['health'].min() - 0.02, recovery_data['health'].max() + 0.04)
+        ax.grid(alpha=0.1)
+        ax.legend(loc='lower right', fontsize=9)
+        
+        # Add recovery duration
+        ax.axvspan(0, 24, color='#ffffbf', alpha=0.2, label='Recovery Period')
+    
+    def _plot_annual_comparison(self, ax):
+        """Plot annual health status comparison"""
+        # Calculate annual health statistics
+        annual_stats = self.daily_data.groupby('year').agg({
+            'health': ['min', 'max', 'mean', 'median']
+        }).reset_index()
+        
+        # Set positions
+        bar_width = 0.2
+        years = annual_stats['year'].unique()
+        index = np.arange(len(years))
+        
+        # Plot bars
+        ax.bar(index, annual_stats[('health', 'max')], bar_width, 
+              color='#2ca02c', label='Annual Peak')
+        ax.bar(index + bar_width, annual_stats[('health', 'mean')], bar_width, 
+              color='#1f77b4', label='Annual Mean')
+        ax.bar(index + bar_width*2, annual_stats[('health', 'median')], bar_width, 
+              color='#ff7f0e', label='Annual Median')
+        ax.bar(index + bar_width*3, annual_stats[('health', 'min')], bar_width, 
+              color='#d62728', label='Annual Valley')
+        
+        # Connect peaks and valleys
+        for i, year in enumerate(years):
+            ax.plot([i + bar_width/2, i + bar_width*3.5], 
+                   [annual_stats.loc[i, ('health', 'max')], 
+                   annual_stats.loc[i, ('health', 'min')]], 
+                   color='#7f7f7f', linestyle='-', alpha=0.3)
+        
+        # Set properties
+        ax.set_title('Annual Health Status Comparison', fontsize=16)
+        ax.set_xlabel('Year', fontsize=12)
+        ax.set_ylabel('Health Status', fontsize=12)
+        ax.set_xticks(index + bar_width*1.5)
+        ax.set_xticklabels([f'Year {year}' for year in years])
+        ax.set_ylim(0.70, 1.02)
+        ax.grid(alpha=0.1)
+        ax.legend(loc='upper right', fontsize=10)
+        
+        # Add value labels
+        for i, year in enumerate(years):
+            ax.text(i + bar_width*0.5, annual_stats.loc[i, ('health', 'max')] + 0.005, 
+                   f'{annual_stats.loc[i, ("health", "max")]:.3f}', 
+                   ha='center', fontsize=9)
+            ax.text(i + bar_width*3.5, annual_stats.loc[i, ('health', 'min')] - 0.01, 
+                   f'{annual_stats.loc[i, ("health", "min")]:.3f}', 
+                   ha='center', fontsize=9, va='top')
+        
+        # Add degradation trend
+        degradation_trend = [1 - annual_stats.loc[i, ('health', 'mean')] for i in range(len(years))]
+        ax2 = ax.twinx()
+        ax2.plot(index + bar_width*1.5, degradation_trend, 
+                'o-', color='#9467bd', linewidth=2, markersize=8, 
+                label='Mean Degradation')
+        ax2.set_ylabel('Degradation Level', fontsize=12)
+        ax2.set_ylim(0, 0.35)
+        ax2.legend(loc='upper left', fontsize=10)
+
+# ======================
+# 6. Execute Simulation and Visualization
+# ======================
+if __name__ == "__main__":
+    # Initialize configuration
+    print("Initializing turbocharger degradation model...")
+    config = DegradationModelConfig()
+    
+    # Run simulation
+    print("Starting simulation...")
+    simulator = AdvancedDegradationSimulator(config)
+    degradation_data, cleaning_hours = simulator.simulate()
+    print(f"Simulation complete! Generated {len(degradation_data)} hourly data points")
+    print(f"Cleaning events: {len(cleaning_hours)}")
+    
+    # Analyze results
+    analyzer = CompleteVisualization(degradation_data, cleaning_hours, config)
+    
+    # Visualize results
+    print("Generating complete four-plot analysis...")
+    analyzer.plot_complete_analysis()
+    
+    # Save results
+    degradation_data.to_csv('turbine_degradation_data.csv', index=False)
+    print("Results saved to 'turbine_degradation_data.csv'")
+    
+    # Print final status
+    final_health = degradation_data['health'].iloc[-1]
+    print(f"\nHealth status after 4 years: {final_health:.4f}")
+    print(f"Total degradation: {1 - final_health:.4f}")
