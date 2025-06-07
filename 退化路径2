@@ -1,0 +1,860 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import re
+import os
+from datetime import datetime, timedelta
+from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import matplotlib.dates as mdates
+
+# 设置随机种子确保可重复性
+torch.manual_seed(42)
+np.random.seed(42)
+
+# 文件路径
+csv_file_path = '/mnt/c/users/think/desktop/主机数据/performance_plots/calculated_performance_data.csv'
+output_path = '/mnt/c/users/think/desktop/scond/tupian'
+os.makedirs(output_path, exist_ok=True)
+
+# 提供的轮机日志文本
+engine_log_text = """
+2015年3月涡轮清洗时间：2015年3月14号8点，2015年3月24号12点，2015年3月27号12点，2015年3月30号12点
+2015年4月涡轮清洗时间：2015年4月2号13点，2015年4月5号13点，2015年4月8号13点，2015年4月11号13点，2015年4月14号13点，2015年4月17号13点，2015年4月20号13点
+2015年5月涡轮清洗时间：2015年5月19号20极，2015年5月22号18点，2015年5月25号18点，2015年5月31号16点
+2015年6月涡轮清洗时间：2015年6月7号13点，2015年6月10号13点，2015年6月13号13点，2015年6月16号12点，2015年6月19号11点，2015年6月22号12点，2015年6月28号9点
+2015年7月涡轮清洗时间：2015年7月1号9点，2015年7月22号9点，2015年7月25号9点，2015年7月30号10点
+2015年8月涡轮清洗时间：2015年8月23号20点
+2015年9月涡轮清洗时间：2015年9月1号19点，2015年9月4号19点，2015年9月7号19点，2015年9月10号19点，2015年9月13号19点，2015年9月17号5点，2015年9月21号2点，2015年9月25号19点
+2015年10月涡轮清洗时间：2015年10月1号9点，2015年10月4号9点，2015年10月7号9点，2015年10月13号12点，2015年10月25号10点，2015年极28号10点，2015年10月31号11点
+2015年11月涡轮清洗时间：2015年11月3号13点，2015年11月6号13点，2015年11月9号15点，2015年11月12号14点，2015年11月15号15点，2015年11月18号17点，2015年11月27号18点，2015年11月30号15点
+2015年12月涡轮清洗时间：2015年12月3号16点，2015年12月8号15点，2015年12月11号12点，2015年12月15号15点，2015年12月19号2点，2015年12月21号10点，2015年12月24号10点，2015年12月27号10点，2015年12月30号9点
+
+2016年1月涡轮清洗时间：2016年1月2号9点，2016年1月25号9点，2016年1月28号9点
+2016年2月涡轮清洗时间：2016年2月2号10点，2016年2月5号11点，2016年2月8号10点，2016年2月12号13点，2016年2月15号14点，2016年2月18号15点，2016年2月21号15点，2016年2月24号15点
+2016年3月涡轮清洗时间：2016年3月7号17点，2016年3月10号17点，2016年3月13号18点，2016年3月16号18点，2016年3月19号17点，2016年3月23号15点，2016年3月26号17点，2016年3月29号12点
+2016年4月涡轮清洗时间：2016年4月1号12点，2016年4月4号11点，2016年4月7号11点，2016年4月11号11点，2016年4月14号10点，2016年4月17号9点，2016年4月20号10点
+2016年5月涡轮清洗时间：2016年5月5号9点，2016年5月8号9点，2016年5月11号9点
+2016年6月涡轮清洗时间：2016年6月17号9点，2016年6月20号11点，2016年6月23号12点，2016年6月26号12点，2016年6月29号14点
+2016年7月涡轮清洗时间：2016年7月3号15点，2016年7月6号16点，2016年7月9号17点，2016年7月12号18点，2016年7月16号20点，2016年7月24号19点，2016年7月27号19点，2016年7月30号17点
+2016年8月涡轮清洗时间：2016年8月2号17点，2016年8月5号16点，2016年8月8号14点，2016年8月11号14点，2016年8月14号13点，2016年8月17号12点，2016年8月20号11点，2016年8月23号10点，2016年8月26号10点，2016年8月29号10点
+2016年9月涡轮清洗时间：2016年9月1号9点，2016年9月4号9点，2016年9月13号9点，2016年9月17号9点，2016年9月22号12点，2016年9月25号11点，2016年9月28号11点
+2016年10月涡轮清洗时间：2016年10月1号13点，2016年10月6号15点，2016年10月9号15点，2016年10月12号17点，2016年10月15号16点，2016年10月18号18点，2016年10月21号19点，2016年10月31号19点
+2016年11月涡轮清洗时间：2016年11月3号19点，2016年11月6号19点，2016年11月9号18点，2016年11月12号18点，2016年11月15号17点，2016年11月18号15点，2016年11月21号14点，2016年11月24号13点，2016年11月27号13点，2016年11月30号13点
+2016年12月涡轮清洗时间：2016年12月3号12点，2016年12月6号10点，2016年12月9号10点，2016年12月12号9点，2016年12月15号9点，2016年12月18号9点，2016年12月30号12点
+
+2017年1月涡轮清洗时间：2017年1月4号10点，2017年1月7号10极，2017年1月16号10点，2017年1月19号12点，2017年1月22号12点，2017年1月25号12点，2017年1月28号14点，2017年1月31号15点
+2017年2月涡轮清洗时间：2017年2月3号16点，2017年2月6号16点，2017年2月9号19点，2017年2月12号19点，2017年2月18号20点，2017年2月21号19点，2017年2月24号1点，2017年2月27号16点
+2017年3月涡轮清洗时间：2017年3月2号14点，2017年3月5号14点，201极3月8号13点，2017年3月11号13点，2017年3月14号12点，2017年3月17号11点，2017年3月20号10点，2017年3月26号10点，2017年3月29号9点
+2017年4月涡轮清洗时间：2017年4月9号14点，2017年4月12号9点，2017年4月9号9点，2017年4月16号11点，2017年4月19号12点，2017年4月22号12点，2017年4月25号13点，2017年4月28号13点
+2017年5月涡轮清洗时间：2017年5月1号14点，2017年5月4号15点，2017年5月9号16点，2017年5月12号16点，2017年5月16号19点，2017年5月19号20点，2017年5月26号20点，2017年5月29号19点
+2017年6月涡轮清洗时间：2017年6月1号18点，2017年6月4号16点，2017年6月7号19点，2017年6月10号16点，2017年6月13号14点，2017年6月16号14点，2017年6月19号12点，2017年6月27号10点
+2017年7月涡轮清洗时间：2017年7月3号10点
+2017年8月涡轮清洗时间：2017年8月20号11点，2017年8月23号12点，2017年8月26号13点，2017年8月29号14点
+2017年9月涡轮清洗时间：2017年9月1号15点，2017年9月4号16点，2017年9月7号17点，2017年9月10号16点，2017年9月3号16点，2017年9月16号20点，2017年9月28号19点
+2017年10月涡轮清洗时间：2017年10月1号19点，2017年10月7号17点，2017年10月10号15点，2017年10月16号14点，2017年10月19号14点，2017年10月22号13点，2017年10月25号11点，2017年10月31号9点
+2017年11月涡轮清洗时间：2017年11月1号9点，2017年11月9号9点
+2017年12月涡轮清洗时间：2017年12月8号9点，2017年12月11号9点，2017年12月17号11点，2017年12月20号11点，2017年12月23号13点，2017年12月26号15点，2017年12月29号15点
+
+2018年1月涡轮清洗时间：2018年1月1号15点，2018年1月4极17点，2018年1月7号18点，2018年1月10号19点，2018年1月19号17点，2018年1月21号19点，2018年1月24号19点，2018年1月27号19点，2018年1月30号17点
+2018年2月涡轮清洗时间：2018年2月2号17点，2018年2月5号15点，2018年2月8号15点，2018年2月11号13点，2018年2月14号12点，2018年2月17号11点，2018年2月20号11点
+2018年3月涡轮清洗时间：2018年3月12号11点，2018年3月15号10点，2018年3月22号11点，2018年3月25号11点，2018年3月27号11点，2018年3月30号14点
+2018年4月涡轮清洗时间：2018年4月2号14点，2018年4月5号15点，2018年4月8号16点，2018年4月11号17点，2018年4月14号18点，2018年4月17号19点
+2018年5月涡轮清洗时间：2018年5月14号19点，2018年5月17号19点，2018年5月20号19点，2018年5月23号17点，2018年5月26号16点，2018年5月29号15点
+2018年6月涡轮清洗时间：2018年6月1号15点，2018年6月4号14点，2018年6月7号13点，2018年6月10号12点，2018年6月13号12点，2018年6月16号10点，2018年6月19号9点，2018年6月22号9点，2018年6月25号9点
+2018年7月涡轮清洗时间：2018年7月13号14点，2018年7月22号18点，2018年7月25号11点，2018年7月28号12点
+2018年8月涡轮清洗时间：2018年8月3号14点，2018年8月6号15点，2018年8月9号16点，2018年8月12号17点，2018年极15号18点，2018年8月18号19点，2018年8月21号21点
+2018年9月涡轮清洗时间：2018年9月2号19点，2018年9月5号19点，2018年9月8号17点，2018年9月12号16点，2018年9月14号16点，2018年9月17号14点，2018年9月20号13点，2018年9月23号13点，2018年9月26号13点
+2018年10月涡轮清洗时间：2018年10月5号10点，2018年10月8号10点，2018年10月20号9点，2018年10月26号10点，2018年10月29号11点
+2018年11月涡轮清洗时间：2018年11月1号12点，2018年11月4号13点，2018年11月7号14点，2018年11月10号20点，2018年11月13号16点，2018年11月16号17点，2018年11月19号18点，2018年11月22号19点
+2018年12月涡轮清洗时间：2018年12月4号19点，2018年12月7号19点，2018年12月10号19点，2018年12月13号18点，2018年12月16号17点，2018年12月26号14点，2018年12月30号12点
+"""
+
+class TurbineDataset(Dataset):
+    """Custom dataset class integrating sensor data and cleaning events"""
+    def __init__(self, sensor_data, cleaning_events, window_size=24, target='HI'):
+        """
+        sensor_data: Sensor DataFrame
+        cleaning_events: Cleaning event time series (1 indicates cleaning event)
+        window_size: Time window size
+        target: Target variable column name
+        """
+        self.window_size = window_size
+        self.features = sensor_data.drop(columns=[target]).columns.tolist()
+        self.target = target
+        
+        print(f"数据集特征: {self.features}")
+        print(f"目标变量: {self.target}")
+        
+        # 标准化特征
+        self.feature_scaler = StandardScaler()
+        
+        # 准备数据
+        X = sensor_data[self.features].values
+        y = sensor_data[target].values.reshape(-1, 1)
+        
+        self.X = self.feature_scaler.fit_transform(X)
+        self.y = y.flatten()  # 不再对目标进行归一化
+        
+        # 整合清洗事件
+        self.cleaning = cleaning_events[:len(self.X)]  # 确保长度匹配
+        
+        # 创建时间窗口序列
+        self.sequences = []
+        self.labels = []
+        self.cleaning_flags = []
+        
+        # 确保索引在有效范围内
+        print(f"创建时间窗口序列，窗口大小: {window_size}, 总样本数: {len(self.X)}")
+        for i in range(len(self.X) - window_size):
+            seq = self.X[i:i+window_size]
+            label = self.y[i+window_size]
+            cleaning_flag = self.cleaning[i+window_size] if (i+window_size < len(self.cleaning)) else 0
+            
+            self.sequences.append(seq)
+            self.labels.append(label)
+            self.cleaning_flags.append(cleaning_flag)
+        
+        self.sequences = np.array(self.sequences)
+        self.labels = np.array(self.labels)
+        self.cleaning_flags = np.array(self.cleaning_flags)
+        
+        print(f"创建了 {len(self.sequences)} 个时间窗口序列")
+    
+    def __len__(self):
+        return len(self.sequences)
+    
+    def __getitem__(self, idx):
+        return {
+            'sensor': torch.tensor(self.sequences[idx], dtype=torch.float32),
+            'cleaning': torch.tensor([self.cleaning_flags[idx]], dtype=torch.float32),
+            'label': torch.tensor([self.labels[idx]], dtype=torch.float32)
+        }
+
+class Autoencoder(nn.Module):
+    """自编码器用于特征提取"""
+    def __init__(self, input_dim, encoding_dim=64):
+        super(Autoencoder, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, encoding_dim),
+            nn.ReLU()
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(encoding_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, input_dim)
+        )
+    
+    def forward(self, x):
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded, encoded
+
+class TurbineHI_Predictor(nn.Module):
+    """涡轮健康指数预测器（整合传感器数据和清洗事件）"""
+    def __init__(self, num_features, encoding_dim=64):
+        super(TurbineHI_Predictor, self).__init__()
+        
+        # 自编码器分支
+        self.autoencoder = Autoencoder(num_features, encoding_dim)
+        
+        # CNN分支
+        self.cnn_branch = nn.Sequential(
+            nn.Conv1d(encoding_dim, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveMaxPool1d(1),
+            nn.Flatten()
+        )
+        
+        # 清洗事件分支
+        self.cleaning_branch = nn.Sequential(
+            nn.Linear(1, 16),
+            nn.ReLU(),
+            nn.Linear(16, 32),
+            nn.ReLU()
+        )
+        
+        # 融合分支
+        self.fusion = nn.Sequential(
+            nn.Linear(128 + 32, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+        
+        print(f"模型初始化: 输入特征数={num_features}, 编码维度={encoding_dim}")
+    
+    def forward(self, sensor, cleaning):
+        batch_size, seq_len, num_features = sensor.shape
+        
+        # 展平序列以便自编码器处理
+        sensor_flat = sensor.view(batch_size * seq_len, num_features)
+        
+        # 通过自编码器
+        _, encoded = self.autoencoder(sensor_flat)
+        
+        # 恢复序列结构 [batch_size, seq_len, encoding_dim]
+        encoded_seq = encoded.view(batch_size, seq_len, -1)
+        
+        # 处理编码后的序列 [batch_size, seq_len, encoding_dim] -> [batch_size, encoding_dim, seq_len]
+        encoded_seq = encoded_seq.permute(0, 2, 1)
+        
+        # 通过CNN分支
+        cnn_out = self.cnn_branch(encoded_seq)
+        
+        # 处理清洗事件
+        cleaning_out = self.cleaning_branch(cleaning)
+        
+        # 融合特征
+        fused = torch.cat([cnn_out, cleaning_out], dim=1)
+        hi_pred = self.fusion(fused)
+        
+        return hi_pred
+
+def parse_engine_log(log_text):
+    """从引擎日志中解析清洗事件"""
+    pattern = r'(\d{4})年(\d{1,2})月(\d{1,2})号(\d{1,2})点'
+    cleaning_events = []
+    
+    for match in re.finditer(pattern, log_text):
+        year, month, day, hour = map(int, match.groups())
+        try:
+            # 处理文本错误
+            if month > 12: month = 1
+            if day > 31: day = 1
+            
+            event_time = datetime(year, month, day, hour)
+            cleaning_events.append(event_time)
+        except ValueError as e:
+            print(f"解析日志时出错: {e}, 匹配内容: {match.group()}")
+            continue
+    
+    unique_events = sorted(set(cleaning_events))
+    print(f"从日志中解析出 {len(unique_events)} 个清洗事件")
+    return unique_events
+
+def create_cleaning_timeline(sensor_data, cleaning_events, start_date, end_date):
+    """创建清洗事件时间线"""
+    # 创建时间序列（每小时）
+    time_index = pd.date_range(start=start_date, end=end_date, freq='H')
+    print(f"创建时间线: {start_date} 到 {end_date}, 总小时数: {len(time_index)}")
+    
+    # 初始化全零数组
+    cleaning_series = pd.Series(0, index=time_index)
+    
+    # 标记清洗事件
+    event_count = 0
+    for event in cleaning_events:
+        # 找到最近的小时点
+        if start_date <= event <= end_date:
+            # 标记清洗事件和恢复期
+            target_time = event.replace(minute=0, second=0)
+            if target_time in cleaning_series.index:
+                # 标记清洗后的24小时为恢复期
+                cleaning_series[target_time] = 1
+                event_count += 1
+                
+                # 标记恢复期
+                recovery_period = pd.date_range(
+                    start=target_time, 
+                    periods=24, 
+                    freq='H',
+                    inclusive='left'
+                )
+                
+                for t in recovery_period:
+                    if t in cleaning_series.index and t != target_time:
+                        cleaning_series[t] = 1
+    
+    print(f"标记了 {event_count} 个清洗事件及其恢复期")
+    return cleaning_series
+
+def train_model(model, train_loader, val_loader, epochs=100, lr=0.001):
+    """训练模型"""
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
+    
+    train_losses = []
+    val_losses = []
+    best_val_loss = float('inf')
+    
+    # 将模型移到GPU（如果可用）
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"使用设备: {device}")
+    model = model.to(device)
+    
+    for epoch in range(epochs):
+        # 训练阶段
+        model.train()
+        epoch_train_loss = 0
+        for batch_idx, batch in enumerate(train_loader):
+            sensor = batch['sensor'].to(device)
+            cleaning = batch['cleaning'].to(device)
+            labels = batch['label'].to(device)
+            
+            optimizer.zero_grad()
+            outputs = model(sensor, cleaning)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            epoch_train_loss += loss.item()
+            
+            # 每100个batch打印一次进度
+            if (batch_idx + 1) % 100 == 0:
+                print(f"Epoch [{epoch+1}/{epochs}], Batch [{batch_idx+1}/{len(train_loader)}], Loss: {loss.item():.6f}")
+        
+        # 验证阶段
+        model.eval()
+        epoch_val_loss = 0
+        with torch.no_grad():
+            for batch in val_loader:
+                sensor = batch['sensor'].to(device)
+                cleaning = batch['cleaning'].to(device)
+                labels = batch['label'].to(device)
+                
+                outputs = model(sensor, cleaning)
+                loss = criterion(outputs, labels)
+                epoch_val_loss += loss.item()
+        
+        # 计算平均损失
+        epoch_train_loss /= len(train_loader)
+        epoch_val_loss /= len(val_loader)
+        train_losses.append(epoch_train_loss)
+        val_losses.append(epoch_val_loss)
+        
+        # 更新学习率
+        scheduler.step(epoch_val_loss)
+        
+        # 保存最佳模型
+        if epoch_val_loss < best_val_loss:
+            best_val_loss = epoch_val_loss
+            torch.save(model.state_dict(), os.path.join(output_path, 'best_model.pth'))
+            print(f"保存最佳模型，验证损失: {best_val_loss:.6f}")
+        
+        # 打印统计信息
+        if (epoch + 1) % 1 == 0:  # 每个epoch都打印
+            print(f'Epoch [{epoch+1}/{epochs}], Train Loss: {epoch_train_loss:.6f}, Val Loss: {epoch_val_loss:.6f}')
+    
+    # 绘制损失曲线
+    try:
+        plt.figure(figsize=(10, 5))
+        plt.plot(train_losses, label='Training Loss')
+        plt.plot(val_losses, label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        
+        loss_plot_path = os.path.join(output_path, 'training_loss.png')
+        plt.savefig(loss_plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"训练损失曲线已保存至: {loss_plot_path}")
+    except Exception as e:
+        print(f"保存训练损失曲线时出错: {e}")
+        traceback.print_exc()
+    
+    # 加载最佳模型
+    best_model_path = os.path.join(output_path, 'best_model.pth')
+    if os.path.exists(best_model_path):
+        model.load_state_dict(torch.load(best_model_path))
+        print(f"已加载最佳模型: {best_model_path}")
+    else:
+        print(f"警告: 未找到最佳模型文件 {best_model_path}")
+    
+    return model
+
+def predict_full_dataset(model, dataset):
+    """在整个数据集上预测"""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    model.eval()
+    
+    all_preds = []
+    
+    # 为整个数据集创建数据加载器
+    full_loader = DataLoader(dataset, batch_size=32, shuffle=False)
+    
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(full_loader):
+            sensor = batch['sensor'].to(device)
+            cleaning = batch['cleaning'].to(device)
+            
+            outputs = model(sensor, cleaning)
+            preds = outputs.cpu().numpy()
+            all_preds.append(preds)
+            
+            # 每100个batch打印一次进度
+            if (batch_idx + 1) % 100 == 0:
+                print(f"预测进度: {batch_idx+1}/{len(full_loader)} 批次")
+    
+    all_preds = np.concatenate(all_preds).flatten()
+    print(f"预测完成，共 {len(all_preds)} 个预测值")
+    return all_preds
+
+def plot_hi_history(actual_hi, predicted_hi, timestamps, cleaning_series):
+    """绘制健康指数历史（完整时间线）"""
+    try:
+        # 设置英文字体
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+        plt.rcParams['font.size'] = 12
+        
+        plt.figure(figsize=(16, 8))
+        
+        # 实际健康指数
+        plt.plot(timestamps, actual_hi, 'b-', label='Actual Health Index', linewidth=1.5, alpha=0.8)
+        
+        # 预测健康指数
+        plt.plot(timestamps, predicted_hi, 'r--', label='Predicted Health Index', linewidth=1.5, alpha=0.9)
+        
+        # 标记清洗事件
+        cleaning_times = [timestamps[i] for i, flag in enumerate(cleaning_series) if flag == 1]
+        if cleaning_times:
+            cleaning_values = [actual_hi[i] for i, t in enumerate(timestamps) if t in cleaning_times]
+            plt.scatter(cleaning_times, cleaning_values,
+                       color='orange', s=50, zorder=5, label='Cleaning Event')
+            print(f"标记了 {len(cleaning_times)} 个清洗事件")
+        else:
+            print("警告: 未找到清洗事件数据")
+        
+        # 添加阈值线
+        plt.axhline(y=0.85, color='#ff7f0e', linestyle='--', alpha=0.8, label='Maintenance Threshold')
+        plt.axhline(y=0.75, color='#d62728', linestyle='--', alpha=0.8, label='Failure Threshold')
+        
+        # 设置图表属性
+        plt.title('Turbine Health Index History and Prediction', fontsize=16)
+        plt.xlabel('Time', fontsize=12)
+        plt.ylabel('Health Index (HI)', fontsize=12)
+        plt.ylim(0.70, 1.02)
+        plt.grid(alpha=0.2)
+        plt.legend()
+        
+        # 格式化日期轴
+        plt.gca().xaxis.set_major_locator(mdates.YearLocator())
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        plt.gcf().autofmt_xdate()
+        
+        plot_path = os.path.join(output_path, 'full_hi_history_prediction.png')
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"健康指数历史图已保存至: {plot_path}")
+        return True
+    except Exception as e:
+        print(f"绘制健康指数历史图时出错: {e}")
+        traceback.print_exc()
+        return False
+
+class TurbineVisualization:
+    """涡轮性能可视化"""
+    def __init__(self, sensor_data, hi_data, cleaning_series, config, window_size):
+        # 确保数据长度一致
+        self.data = sensor_data.iloc[window_size:].copy()
+        self.data['HI'] = hi_data[:len(self.data)]
+        self.data['cleaning_event'] = cleaning_series.iloc[window_size:].values[:len(self.data)]
+        self.config = config
+        
+        # 创建每日数据
+        self.data['date'] = self.data.index.date
+        self.daily_data = self.data.groupby('date').last().reset_index()
+        
+        # 添加年份信息
+        self.daily_data['year'] = self.daily_data['date'].apply(lambda x: x.year)
+        
+        # 设置英文字体
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+        plt.rcParams['font.size'] = 12
+        
+        print(f"可视化数据初始化完成，数据量: {len(self.data)}")
+    
+    def plot_main_health_trend(self):
+        """绘制主要健康趋势"""
+        try:
+            plt.figure(figsize=(14, 7))
+            
+            # 应用平滑
+            self.daily_data['health_smooth'] = self.daily_data['HI'].rolling(window=7, min_periods=1).mean()
+            
+            # 绘制平滑的健康趋势
+            plt.plot(self.daily_data['date'], self.daily_data['health_smooth'], 
+                    color='#1f77b4', linewidth=2.5, label='Health Status')
+            
+            # 标记清洗事件
+            cleaning_dates = self.data[self.data['cleaning_event'] == 1].index.date
+            if cleaning_dates.any():
+                for date in cleaning_dates:
+                    plt.axvline(x=date, color='#ff7f0e', alpha=0.3, linestyle='-', zorder=1)
+                print(f"标记了 {len(cleaning_dates)} 个清洗事件")
+            else:
+                print("警告: 未找到清洗事件数据")
+            
+            # 添加阈值线
+            plt.axhline(y=0.85, color='#ff7f0e', linestyle='--', alpha=0.8)
+            plt.text(self.daily_data['date'].iloc[10], 0.852, 'Maintenance Threshold', fontsize=12, color='#ff7f0e')
+            
+            plt.axhline(y=0.75, color='#d62728', linestyle='--', alpha=0.8)
+            plt.text(self.daily_data['date'].iloc[10], 0.752, 'Failure Threshold', fontsize=12, color='#d62728')
+            
+            # 添加年份标记
+            years = pd.date_range(start=self.config['start_date'], end=self.config['end_date'], freq='YS')
+            for year in years:
+                plt.axvline(x=year, color='#2ca02c', linestyle='--', alpha=0.5, zorder=1)
+                plt.text(year + timedelta(days=10), 0.72, f'{year.year}', fontsize=11, color='#2ca02c')
+            
+            # 设置属性
+            plt.title('Turbine Health Status Trend with Cleaning Events', fontsize=16)
+            plt.xlabel('Date', fontsize=12)
+            plt.ylabel('Health Status', fontsize=12)
+            plt.ylim(0.70, 1.02)
+            plt.xlim(self.config['start_date'], self.config['end_date'])
+            plt.grid(alpha=0.1)
+            
+            # 格式化日期轴
+            plt.gca().xaxis.set_major_locator(mdates.YearLocator())
+            plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+            plt.gcf().autofmt_xdate()
+            
+            plt.legend(loc='lower left')
+            
+            plot_path = os.path.join(output_path, 'main_health_trend.png')
+            plt.tight_layout()
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"主要健康趋势图已保存至: {plot_path}")
+            return True
+        except Exception as e:
+            print(f"绘制主要健康趋势图时出错: {e}")
+            traceback.print_exc()
+            return False
+    
+    def plot_annual_comparison(self):
+        """绘制年度健康比较"""
+        try:
+            # 计算年度健康统计数据
+            annual_stats = self.daily_data.groupby('year').agg({
+                'HI': ['min', 'max', 'mean', 'median']
+            }).reset_index()
+            
+            print(f"年度统计数据: {annual_stats}")
+            
+            # 设置位置
+            bar_width = 0.2
+            years = annual_stats['year'].unique()
+            index = np.arange(len(years))
+            
+            # 绘制条形图
+            plt.figure(figsize=(14, 7))
+            plt.bar(index, annual_stats[('HI', 'max')], bar_width, 
+                   color='#2ca02c', label='Annual Peak')
+            plt.bar(index + bar_width, annual_stats[('HI', 'mean')], bar_width, 
+                   color='#1f77b4', label='Annual Mean')
+            plt.bar(index + bar_width*2, annual_stats[('HI', 'median')], bar_width, 
+                   color='#ff7f0e', label='Annual Median')
+            plt.bar(index + bar_width*3, annual_stats[('HI', 'min')], bar_width, 
+                   color='#d62728', label='Annual Trough')
+            
+            # 连接峰值和谷值
+            for i, year in enumerate(years):
+                plt.plot([i + bar_width/2, i + bar_width*3.5], 
+                        [annual_stats.loc[i, ('HI', 'max')], 
+                        annual_stats.loc[i, ('HI', 'min')]], 
+                        color='#7f7f7f', linestyle='-', alpha=0.3)
+            
+            # 设置属性
+            plt.title('Annual Health Comparison', fontsize=16)
+            plt.xlabel('Year', fontsize=12)
+            plt.ylabel('Health Status', fontsize=12)
+            plt.xticks(index + bar_width*1.5, [f'{year}' for year in years])
+            plt.ylim(0.70, 1.02)
+            plt.grid(alpha=0.1)
+            plt.legend(loc='upper right')
+            
+            # 添加数值标签
+            for i, year in enumerate(years):
+                plt.text(i + bar_width*0.5, annual_stats.loc[i, ('HI', 'max')] + 0.005, 
+                        f'{annual_stats.loc[i, ("HI", "max")]:.3f}', 
+                        ha='center', fontsize=9)
+                plt.text(i + bar_width*3.5, annual_stats.loc[i, ('HI', 'min')] - 0.01, 
+                        f'{annual_stats.loc[i, ("HI", "min")]:.3f}', 
+                        ha='center', fontsize=9, va='top')
+            
+            # 添加退化趋势
+            degradation_trend = [1 - annual_stats.loc[i, ('HI', 'mean')] for i in range(len(years))]
+            ax2 = plt.gca().twinx()
+            ax2.plot(index + bar_width*1.5, degradation_trend, 
+                    'o-', color='#9467bd', linewidth=2, markersize=8, 
+                    label='Average Degradation Level')
+            ax2.set_ylabel('Degradation Level', fontsize=12)
+            ax2.set_ylim(0, 0.35)
+            ax2.legend(loc='upper left')
+            
+            plot_path = os.path.join(output_path, 'annual_health_comparison.png')
+            plt.tight_layout()
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"年度健康比较图已保存至: {plot_path}")
+            return True
+        except Exception as e:
+            print(f"绘制年度健康比较图时出错: {e}")
+            traceback.print_exc()
+            return False
+    
+    def plot_cleaning_effectiveness(self):
+        """绘制清洗效果分析"""
+        try:
+            # 提取清洗事件数据
+            cleaning_events = self.data[self.data['cleaning_event'] == 1]
+            if cleaning_events.empty:
+                print("没有清洗事件可供分析")
+                return False
+            
+            print(f"找到 {len(cleaning_events)} 个清洗事件")
+            
+            # 计算清洗效果
+            cleaning_events = cleaning_events.sort_index()
+            recovery_values = []
+            
+            for i, event in cleaning_events.iterrows():
+                # 找到清洗后24小时内的数据
+                post_clean = self.data[(self.data.index > i) & (self.data.index <= i + timedelta(hours=24))]
+                if not post_clean.empty:
+                    max_recovery = post_clean['HI'].max()
+                    recovery = max_recovery - event['HI']
+                    recovery_values.append(recovery)
+            
+            # 如果没有恢复值，返回
+            if not recovery_values:
+                print("未计算出恢复值")
+                return False
+            
+            print(f"计算了 {len(recovery_values)} 个恢复值")
+            
+            # 绘制清洗效果
+            plt.figure(figsize=(14, 7))
+            plt.plot(cleaning_events.index, recovery_values, 
+                    'o-', color='#1f77b4', markersize=8, linewidth=2, label='Recovery Value')
+            
+            # 如果有足够的数据点，添加趋势线
+            if len(recovery_values) >= 2:
+                # 转换为数值日期
+                x_num = mdates.date2num(cleaning_events.index)
+                coeffs = np.polyfit(x_num, recovery_values, 1)
+                slope = coeffs[0]
+                intercept = coeffs[1]
+                
+                # 计算R平方
+                y_pred = np.polyval(coeffs, x_num)
+                ss_res = np.sum((recovery_values - y_pred) ** 2)
+                ss_tot = np.sum((recovery_values - np.mean(recovery_values)) ** 2)
+                r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+                
+                trend_line = intercept + slope * x_num
+                plt.plot(cleaning_events.index, trend_line, 
+                        '--', color='#d62728', linewidth=2, 
+                        label=f'Trend: y = {slope:.5f}x + {intercept:.3f}\nR² = {r_squared:.3f}')
+            
+            # 设置属性
+            plt.title('Cleaning Effectiveness Analysis', fontsize=16)
+            plt.xlabel('Cleaning Time', fontsize=12)
+            plt.ylabel('Recovery Value', fontsize=12)
+            plt.grid(alpha=0.2)
+            plt.legend()
+            
+            # 格式化日期轴
+            plt.gca().xaxis.set_major_locator(mdates.YearLocator())
+            plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+            
+            plot_path = os.path.join(output_path, 'cleaning_effectiveness.png')
+            plt.tight_layout()
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"清洗效果分析图已保存至: {plot_path}")
+            return True
+        except Exception as e:
+            print(f"绘制清洗效果分析图时出错: {e}")
+            traceback.print_exc()
+            return False
+
+def main():
+    print("="*50)
+    print("开始涡轮健康分析")
+    print("="*50)
+    
+    try:
+        # 1. 配置时间参数
+        start_date = datetime(2015, 3, 14, 1, 0, 0)
+        end_date = datetime(2019, 1, 14, 23, 59, 0)
+        config = {
+            'start_date': start_date,
+            'end_date': end_date
+        }
+        print(f"分析时间范围: {start_date} 至 {end_date}")
+        
+        # 2. 解析引擎日志
+        print("\n解析引擎日志...")
+        cleaning_events = parse_engine_log(engine_log_text)
+        
+        # 3. 加载并预处理传感器数据
+        print("\n加载传感器数据...")
+        try:
+            sensor_data = pd.read_csv(csv_file_path)
+            print(f"加载传感器数据成功，原始形状: {sensor_data.shape}")
+            
+            # 转换时间列为datetime并设为索引
+            if 'sample_time' in sensor_data.columns:
+                sensor_data['sample_time'] = pd.to_datetime(sensor_data['sample_time'])
+                sensor_data.set_index('sample_time', inplace=True)
+                print("已设置时间索引")
+            else:
+                print("错误: 数据框中缺少'sample_time'列")
+                return
+        except Exception as e:
+            print(f"加载CSV文件时出错: {e}")
+            traceback.print_exc()
+            return
+        
+        # 4. 创建清洗时间线
+        print("\n创建清洗时间线...")
+        cleaning_series = create_cleaning_timeline(
+            sensor_data, cleaning_events, start_date, end_date)
+        
+        # 5. 对齐传感器数据与清洗时间线
+        print("\n对齐传感器数据与时间线...")
+        # 获取清洗时间线索引
+        aligned_index = cleaning_series.index
+        
+        # 将传感器数据重采样为小时（平均值）
+        sensor_data_resampled = sensor_data.resample('H').mean()
+        print(f"重采样后数据形状: {sensor_data_resampled.shape}")
+        
+        # 筛选时间范围内的数据
+        sensor_data_aligned = sensor_data_resampled.reindex(aligned_index)
+        print(f"对齐后数据形状 (重采样): {sensor_data_aligned.shape}")
+        
+        # 填充缺失值（线性插值）
+        sensor_data_aligned = sensor_data_aligned.interpolate(method='linear')
+        sensor_data_aligned = sensor_data_aligned.fillna(method='bfill').fillna(method='ffill')
+        
+        # 添加健康指数列（初始设为1.0）
+        sensor_data_aligned['HI'] = 1.0
+        
+        print(f"最终对齐数据形状: {sensor_data_aligned.shape}")
+        
+        # 6. 创建数据集 - 使用对齐后的数据
+        print("\n创建数据集...")
+        dataset = TurbineDataset(sensor_data_aligned, cleaning_series.values)
+        
+        # 7. 分割训练集和测试集
+        print("\n分割数据集...")
+        indices = np.arange(len(dataset))
+        train_indices, test_indices = train_test_split(indices, test_size=0.2, shuffle=False)
+        
+        train_dataset = torch.utils.data.Subset(dataset, train_indices)
+        test_dataset = torch.utils.data.Subset(dataset, test_indices)
+        
+        # 进一步分割训练集和验证集
+        train_indices, val_indices = train_test_split(
+            np.arange(len(train_dataset)), test_size=0.2, shuffle=False)
+        val_dataset = torch.utils.data.Subset(train_dataset, val_indices)
+        train_dataset = torch.utils.data.Subset(train_dataset, train_indices)
+        
+        print(f"训练集: {len(train_dataset)}, 验证集: {len(val_dataset)}, 测试集: {len(test_dataset)}")
+        
+        # 创建数据加载器
+        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=32)
+        test_loader = DataLoader(test_dataset, batch_size=32)
+        
+        # 8. 初始化模型
+        print("\n初始化模型...")
+        num_features = len(dataset.features)
+        model = TurbineHI_Predictor(num_features=num_features)
+        print(f"模型可训练参数数量: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
+        
+        # 9. 训练模型
+        print("\n开始训练模型...")
+        model = train_model(model, train_loader, val_loader, epochs=100)
+        print("模型训练完成!")
+        
+        # 10. 在整个数据集上预测
+        print("\n在整个数据集上进行预测...")
+        full_preds = predict_full_dataset(model, dataset)
+        
+        # 获取实际HI值（来自数据集）
+        actual_hi = dataset.labels
+        
+        # 获取时间戳（跳过窗口大小）
+        timestamps = sensor_data_aligned.index[dataset.window_size:]
+        print(f"时间戳数量: {len(timestamps)}, 实际HI数量: {len(actual_hi)}, 预测HI数量: {len(full_preds)}")
+        
+        # 11. 绘制完整的健康指数历史
+        print("\n绘制健康指数历史图...")
+        plot_success = plot_hi_history(actual_hi, full_preds, timestamps, cleaning_series[dataset.window_size:])
+        
+        # 12. 创建可视化
+        print("\n创建可视化图表...")
+        visualizer = TurbineVisualization(
+            sensor_data_aligned, 
+            actual_hi, 
+            cleaning_series, 
+            config,
+            window_size=dataset.window_size
+        )
+        
+        # 绘制各图表
+        plots_created = 0
+        if visualizer.plot_main_health_trend():
+            plots_created += 1
+        if visualizer.plot_annual_comparison():
+            plots_created += 1
+        if visualizer.plot_cleaning_effectiveness():
+            plots_created += 1
+            
+        print(f"成功创建 {plots_created}/3 个可视化图表")
+        
+        # 13. 保存结果
+        print("\n保存结果...")
+        results_df = pd.DataFrame({
+            'timestamp': timestamps,
+            'actual_HI': actual_hi,
+            'predicted_HI': full_preds,
+            'cleaning_event': cleaning_series[dataset.window_size:].values
+        })
+        results_path = os.path.join(output_path, 'turbine_hi_history_predictions.csv')
+        results_df.to_csv(results_path, index=False)
+        print(f"健康指数预测结果已保存至: {results_path}")
+        
+        # 14. 保存清洗事件数据
+        cleaning_df = pd.DataFrame({
+            'timestamp': cleaning_series.index,
+            'cleaning_event': cleaning_series.values
+        })
+        cleaning_path = os.path.join(output_path, 'turbine_cleaning_events.csv')
+        cleaning_df.to_csv(cleaning_path, index=False)
+        print(f"清洗事件数据已保存至: {cleaning_path}")
+        
+        print(f"\n所有分析结果已保存至目录: {output_path}")
+        print("="*50)
+        print("分析完成!")
+        print("="*50)
+        
+    except Exception as e:
+        print(f"主函数执行出错: {e}")
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
